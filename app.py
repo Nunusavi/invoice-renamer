@@ -1,84 +1,96 @@
 import os
 import re
+import shutil
 import zipfile
+import tempfile
 from datetime import datetime
-from flask import Flask, render_template, request, send_file, jsonify
-from werkzeug.utils import secure_filename
+from flask import Flask, request, send_file, render_template
 from PyPDF2 import PdfReader
-from io import BytesIO
+import pandas as pd
 
 app = Flask(__name__)
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Regex patterns to extract invoice info
-DATE_PATTERN = r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
-ORDER_PATTERN = r'Order\s*(?:No|Number)[:\s]*([A-Z0-9-]+)'
-INVOICE_PATTERN = r'Invoice\s*(?:No|Number)[:\s]*([A-Z0-9-]+)'
-COMPANY_PATTERN = r'(?:From|Supplier|Company)[:\s]*([A-Za-z0-9 &.,]+)'
+UPLOAD_FOLDER = tempfile.mkdtemp()
 
-def extract_invoice_info(text):
-    date_match = re.search(DATE_PATTERN, text)
-    order_match = re.search(ORDER_PATTERN, text)
-    invoice_match = re.search(INVOICE_PATTERN, text)
-    company_match = re.search(COMPANY_PATTERN, text)
 
+def extract_text(file_path):
     try:
-        date_raw = date_match.group(1)
-        invoice_date = datetime.strptime(date_raw.replace('/', '-'), "%d-%m-%Y").strftime("%d-%m-%Y")
-    except:
-        invoice_date = "unknown-date"
+        with open(file_path, 'rb') as f:
+            reader = PdfReader(f)
+            return "".join(page.extract_text() or '' for page in reader.pages)
+    except Exception as e:
+        print(f"Error extracting text from {file_path}: {e}")
+        return ""
 
-    order_or_invoice = order_match.group(1) if order_match else (invoice_match.group(1) if invoice_match else "unknown-id")
-    company = company_match.group(1).strip().replace(" ", "_") if company_match else "UnknownCompany"
+def extract_pdf_metadata(file_path):
+    text = extract_text(file_path)
 
-    return invoice_date, company, order_or_invoice
+    order_number_match = re.search(r'Order #\s*(\S+)', text)
+    order_number = order_number_match.group(1) if order_number_match else "UnknownOrder"
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+    sold_by_match = re.search(r'Sold by\s*([^\s]+\s+[^\s]+)', text)
+    sold_by = sold_by_match.group(1).strip() if sold_by_match else "UnknownCompany"
 
-@app.route('/process', methods=['POST'])
-def process():
-    files = request.files.getlist('files')
-    renamed_files = []
-    zip_buffer = BytesIO()
-
-    for file in files:
-        if file.filename.endswith('.pdf'):
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(filepath)
-
-            try:
-                reader = PdfReader(filepath)
-                text = ''.join(page.extract_text() or "" for page in reader.pages)
-
-                date, company, ref_number = extract_invoice_info(text)
-                new_filename = f"{date}_{company}_{ref_number}.pdf"
-                new_path = os.path.join(UPLOAD_FOLDER, new_filename)
-                os.rename(filepath, new_path)
-
-                renamed_files.append((filename, new_filename, new_path))
-
-            except Exception as e:
-                print(f"Error processing {filename}: {e}")
-                continue
-
-    if len(renamed_files) >= 5:
-        with zipfile.ZipFile(zip_buffer, 'w') as zipf:
-            for _, new_name, path in renamed_files:
-                zipf.write(path, new_name)
-        zip_buffer.seek(0)
-        return send_file(zip_buffer, as_attachment=True, download_name="renamed_invoices.zip", mimetype='application/zip')
+    invoice_date_match = re.search(r'Order date\s*(.*)', text)
+    if invoice_date_match:
+        try:
+            invoice_date = pd.to_datetime(invoice_date_match.group(1).strip()).strftime('%d-%m-%Y')
+        except ValueError:
+            invoice_date = "UnknownDate"
     else:
-        response = [{"original": orig, "renamed": renamed} for orig, renamed, _ in renamed_files]
-        return jsonify(response)
+        invoice_date = "UnknownDate"
 
-@app.route('/download/<filename>')
-def download_file(filename):
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
-    return send_file(file_path, as_attachment=True)
+    return invoice_date, sold_by, order_number
+
+def rename_file(original_path, output_folder, used_names):
+    invoice_date, sold_by, order_number = extract_pdf_metadata(original_path)
+    base_name = f"{invoice_date} {order_number} {sold_by}.pdf"
+
+    part = 1
+    new_name = base_name
+    while new_name in used_names:
+        part += 1
+        new_name = f"{invoice_date} {order_number} {sold_by} part {part}.pdf"
+
+    used_names.add(new_name)
+    new_path = os.path.join(output_folder, new_name)
+    shutil.copy2(original_path, new_path)
+    return new_path
+
+@app.route('/', methods=['GET', 'POST'])
+def upload_files():
+    if request.method == 'POST':
+        files = request.files.getlist('pdfs')
+        if not files:
+            return 'No files uploaded.'
+
+        output_dir = tempfile.mkdtemp()
+        used_names = set()
+        result_files = []
+
+        for file in files:
+            filename = file.filename
+            file_path = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(file_path)
+            new_file = rename_file(file_path, output_dir, used_names)
+            result_files.append(new_file)
+
+        if len(result_files) >= 5:
+            zip_path = os.path.join(UPLOAD_FOLDER, f"renamed_pdfs_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip")
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                for f in result_files:
+                    zipf.write(f, os.path.basename(f))
+            return send_file(zip_path, as_attachment=True)
+        elif len(result_files) == 1:
+            return send_file(result_files[0], as_attachment=True)
+        else:
+            zip_path = os.path.join(UPLOAD_FOLDER, f"bundle_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip")
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                for f in result_files:
+                    zipf.write(f, os.path.basename(f))
+            return send_file(zip_path, as_attachment=True)
+
+    return render_template('index.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

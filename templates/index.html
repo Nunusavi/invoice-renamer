@@ -3,84 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Invoice Renamer</title>
+    <title>PDF Renamer</title>
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
-  <body class="bg-gray-100 flex items-center justify-center min-h-screen px-4">
-    <div class="bg-white shadow-xl rounded-xl p-8 w-full max-w-xl">
-      <h1 class="text-2xl font-bold text-gray-800 mb-6 text-center">
-        PDF Invoice Renamer
-      </h1>
-
-      <form id="upload-form" enctype="multipart/form-data" class="space-y-4">
-        <input
-          type="file"
-          name="files"
-          id="files"
-          accept="application/pdf"
-          multiple
-          required
-          class="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-        />
-
+  <body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="bg-white p-10 rounded-2xl shadow-md w-full max-w-xl">
+      <h2 class="text-2xl font-bold mb-6 text-center">Upload PDF Files</h2>
+      <form method="post" enctype="multipart/form-data" id="uploadForm">
+        <div
+          id="dropzone"
+          class="border-4 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer text-gray-500 hover:border-blue-400 transition mb-4"
+        >
+          Drag & drop PDFs here or click to browse
+          <input
+            type="file"
+            name="pdfs"
+            id="fileInput"
+            class="hidden"
+            multiple
+            accept="application/pdf"
+          />
+        </div>
+        <div id="fileList" class="text-sm text-gray-700 mb-4"></div>
         <button
           type="submit"
-          class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-xl"
+          class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-xl w-full"
         >
-          Upload & Rename
+          Upload
         </button>
       </form>
-
-      <div id="loading" class="mt-6 hidden text-center">
-        <div
-          class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"
-        ></div>
-        <p class="text-gray-600">Processing invoices...</p>
-      </div>
-
-      <div id="results" class="mt-6 hidden">
-        <h2 class="text-lg font-semibold mb-2">Renamed Files:</h2>
-        <ul id="file-list" class="space-y-1 text-sm text-gray-700"></ul>
-      </div>
     </div>
-
     <script>
-      const form = document.getElementById("upload-form");
-      const loading = document.getElementById("loading");
-      const results = document.getElementById("results");
-      const fileList = document.getElementById("file-list");
+      const dropzone = document.getElementById("dropzone");
+      const fileInput = document.getElementById("fileInput");
+      const fileList = document.getElementById("fileList");
 
-      form.addEventListener("submit", async (e) => {
+      dropzone.addEventListener("click", () => fileInput.click());
+      dropzone.addEventListener("dragover", (e) => {
         e.preventDefault();
-        loading.classList.remove("hidden");
-        results.classList.add("hidden");
-        fileList.innerHTML = "";
-
-        const formData = new FormData(form);
-
-        const response = await fetch("/process", {
-          method: "POST",
-          body: formData,
-        });
-
-        loading.classList.add("hidden");
-
-        if (response.headers.get("Content-Type").includes("application/zip")) {
-          const blob = await response.blob();
-          const link = document.createElement("a");
-          link.href = window.URL.createObjectURL(blob);
-          link.download = "renamed_invoices.zip";
-          link.click();
-        } else {
-          const data = await response.json();
-          results.classList.remove("hidden");
-          data.forEach((file) => {
-            const item = document.createElement("li");
-            item.innerHTML = `<strong>${file.original}</strong> ➜ <a href="/download/${file.renamed}" class="text-blue-600 hover:underline">${file.renamed}</a>`;
-            fileList.appendChild(item);
-          });
-        }
+        dropzone.classList.add("border-blue-400");
       });
+      dropzone.addEventListener("dragleave", () =>
+        dropzone.classList.remove("border-blue-400")
+      );
+      dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        fileInput.files = e.dataTransfer.files;
+        updateFileList();
+      });
+      fileInput.addEventListener("change", updateFileList);
+
+      function updateFileList() {
+        fileList.innerHTML = "";
+        for (let file of fileInput.files) {
+          fileList.innerHTML += `<div class='my-1'>📄 ${file.name}</div>`;
+        }
+      }
     </script>
   </body>
 </html>
